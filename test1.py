@@ -1,5 +1,6 @@
 import subprocess
 import re
+from main import Parser
 
 def parse_weka_output(output_str):
   """Parses Weka's output to extract specific metrics.
@@ -63,6 +64,10 @@ def main():
   print("FPR for ACL:", metrics['ACL_FPR'])
   print("FPR for nonACL:", metrics['nonACL_FPR'])
   print("ROC Area for ACL:", metrics['ACL_ROC_Area'])
+
+  print("\n\n===== Extracted attributes:")
+  attributes = Parser.get_ranked_attributes(output.stdout, 5)
+  print(attributes)
 
 
 if __name__ == "__main__":
