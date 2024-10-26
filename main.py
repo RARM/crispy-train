@@ -1,4 +1,5 @@
-# import subprocess
+import subprocess
+import threading
 import os
 import re
 from dotenv import load_dotenv
@@ -25,14 +26,14 @@ class Parser:
         # Extract FPR and ROC Area for ACL class
         match = re.findall(r"(\d+).*?(\d+)", line)
         if match:
-          metrics['ACL_FPR'] = float('.'.join(match[1]))
-          metrics['ACL_ROC_Area'] = float('.'.join(match[6]))
+          metrics['FPR_type1err'] = float('.'.join(match[1]))
+          metrics['ROC_Area'] = float('.'.join(match[6]))
 
       if 'nonACL' in line:
         # Extract FPR for nonACL class
         match = re.findall(r"(\d+).*?(\d+)", line)
         if match:
-          metrics['nonACL_FPR'] = float('.'.join(match[1]))
+          metrics['FNR_type2err'] = float('.'.join(match[1]))
 
     return metrics
   
@@ -108,23 +109,86 @@ class WekaController:
     print('ARFF file:', self.arff_file)
     configs = self.__build_all_configs()
     print('\nNumber of configurations:', len(configs), end='\n\n')
+
+  def run_experiments(self):
+    commands = self.__build_all_configs()
+    mt_runner = MultiThreadedWekaRunner(
+      commands,
+      self.java_path,
+      self.weka_jar,
+      self.arff_file
+    )
+    return mt_runner.run()
+
+  @staticmethod
+  def print_result(result: dict):
+    print(f"\n\nConfiguration ID: {result['id']}")
+    print(f"Classifier: {result['classifier']}")
+    print(f"Ranker: {result['ranker']}")
+    print(f"Number of attributes: {result['attributesNum']}")
+    print(f"Attributes: {result['attributes']}")
+    print(f"Metrics: {result['metrics']}")
+
+class MultiThreadedWekaRunner:
+  def __init__(self, commands: list, java_path: str, weka_jar: str, data_file: str):
+    self.commands = commands
+    self.shared_results = []
+    self.java_path = java_path
+    self.weka_jar = weka_jar
+    self.data_file = data_file
+  
+  def run(self):
+    threads = []
+    for i, command in enumerate(self.commands):
+      thread = threading.Thread(target=self.__run_command, args=(i, command))
+      threads.append(thread)
+      thread.start()
+    
+    for thread in threads:
+      thread.join()
+    
+    return self.shared_results
+  
+  def __run_command(self, id: int, command: dict):
+    cmd = f"{self.java_path} -classpath {self.weka_jar} weka.classifiers.meta.AttributeSelectedClassifier -t {self.data_file} -x 10 -E \"{command['ranker']['command']}\" -S \"weka.attributeSelection.Ranker -T -1.0 -N {command['attrNum']}\" -W {command['classifier']['command']}"
+    output = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    metrics = Parser.get_metrics(output.stdout)
+    attributes = Parser.get_ranked_attributes(output.stdout, command['attrNum'])
+    self.shared_results.append({
+      'id': id,
+      'classifier': command['classifier']['name'],
+      'ranker': command['ranker']['name'],
+      'attributesNum': command['attrNum'],
+      'attributes': attributes,
+      'metrics': metrics,
+    })
   
 def main():
+  # classifiers_cmds = {
+  #   'NaiveBayes': 'weka.classifiers.bayes.NaiveBayes',
+  #   '5NN': "weka.classifiers.lazy.IBk -- -K 5 -W 0 -A \"weka.core.neighboursearch.LinearNNSearch -A \\\"weka.core.EuclideanDistance -R first-last\\\"\""
+  # }
+
+  # rankers = {
+  #   'GainRatio': 'weka.attributeSelection.GainRatioAttributeEval',
+  #   'SymmetricUncertainty': 'weka.attributeSelection.SymmetricalUncertAttributeEval',
+  #   'ReliefF': 'weka.attributeSelection.ReliefFAttributeEval -M -1 -D 1 -K 10',
+  #   'ReliefF-W': 'weka.attributeSelection.ReliefFAttributeEval -W -M -1 -D 1 -K 10 -A 2',
+  #   'InformationGain': 'weka.attributeSelection.InfoGainAttributeEval',
+  #   'ChiSquared': 'weka.attributeSelection.ChiSquaredAttributeEval'
+  # }
+
+  # top_attributes = [5, 6, 7, 8, 9, 10, 20, 50, 100, 200]
+
   classifiers_cmds = {
-    'NaiveBayes': 'weka.classifiers.bayes.NaiveBayes',
-    '5NN': "weka.classifiers.lazy.IBk -- -K 5 -W 0 -A \"weka.core.neighboursearch.LinearNNSearch -A \\\"weka.core.EuclideanDistance -R first-last\\\"\""
+    'NaiveBayes': 'weka.classifiers.bayes.NaiveBayes'
   }
 
   rankers = {
-    'GainRatio': 'weka.attributeSelection.GainRatioAttributeEval',
-    'SymmetricUncertainty': 'weka.attributeSelection.SymmetricalUncertAttributeEval',
-    'ReliefF': 'weka.attributeSelection.ReliefFAttributeEval -M -1 -D 1 -K 10',
-    'ReliefF-W': 'weka.attributeSelection.ReliefFAttributeEval -W -M -1 -D 1 -K 10 -A 2',
-    'InformationGain': 'weka.attributeSelection.InfoGainAttributeEval',
-    'ChiSquared': 'weka.attributeSelection.ChiSquaredAttributeEval'
+    'GainRatio': 'weka.attributeSelection.GainRatioAttributeEval'
   }
 
-  top_attributes = [5, 6, 7, 8, 9, 10, 20, 50, 100, 200]
+  top_attributes = [5, 6]
 
   load_dotenv()
 
@@ -144,6 +208,9 @@ def main():
   )
 
   weka_runner.print_configuration()
+  results = weka_runner.run_experiments()
+  for result in results:
+    WekaController.print_result(result)
 
 if __name__ == '__main__':
   main()
