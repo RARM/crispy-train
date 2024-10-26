@@ -92,6 +92,21 @@ class WekaController:
     configs = []
     for classifier_name, classifier_cmd in self.classifiers.items():
       for ranker_name, ranker_cmd in self.rankers.items():
+        if ranker_name == 'None':
+          config = {
+          'classifier': {
+            'name': classifier_name,
+            'command': classifier_cmd
+          },
+          'ranker': {
+            'name': ranker_name,
+            'command': ranker_cmd
+          },
+          'attrNum': 0
+          }
+          configs.append(config)
+          continue
+        
         for attr_num in self.top_attributes:
           config = {
           'classifier': {
@@ -165,7 +180,12 @@ class MultiThreadedWekaRunner:
     return ':'.join(all_packages)
   
   def __run_command(self, id: int, command: dict, packages_str: str):
-    cmd = f"{self.java_path} -classpath {packages_str} weka.classifiers.meta.AttributeSelectedClassifier -t {self.data_file} -x 10 -E \"{command['ranker']['command']}\" -S \"weka.attributeSelection.Ranker -T -1.0 -N {command['attrNum']}\" -W {command['classifier']['command']}"
+    if command['ranker']['name'] == 'None':
+      cmd = f"{self.java_path} -classpath {packages_str} {command['classifier']['command']} -t {self.data_file} -x 10"
+      if '5NN' in command['classifier']['name']:
+        cmd = f"{self.java_path} -classpath {packages_str} weka.classifiers.lazy.IBk -K 5 -W 0 -A \"weka.core.neighboursearch.LinearNNSearch -A \\\"weka.core.EuclideanDistance -R first-last\\\"\" -t {self.data_file} -x 10"
+    else:
+      cmd = f"{self.java_path} -classpath {packages_str} weka.classifiers.meta.AttributeSelectedClassifier -t {self.data_file} -x 10 -E \"{command['ranker']['command']}\" -S \"weka.attributeSelection.Ranker -T -1.0 -N {command['attrNum']}\" -W {command['classifier']['command']}"
     output = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     metrics = Parser.get_metrics(output.stdout)
     attributes = Parser.get_ranked_attributes(output.stdout, command['attrNum'])
@@ -225,6 +245,7 @@ def main():
   }
 
   rankers = {
+    'None': '',
     'GainRatio': 'weka.attributeSelection.GainRatioAttributeEval',
     'SymmetricUncertainty': 'weka.attributeSelection.SymmetricalUncertAttributeEval',
     'ReliefF': 'weka.attributeSelection.ReliefFAttributeEval -M -1 -D 1 -K 10',
